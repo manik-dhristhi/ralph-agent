@@ -45,7 +45,6 @@ venv.bak/
 # Ralph Agent workspaces
 output/
 state.md
-SKILL.md
 
 # Logs
 *.log
