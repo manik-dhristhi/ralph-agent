@@ -3,17 +3,10 @@
 Key insight: Don't inject massive prompts. Keep it simple.
 """
 
-import sys
 from pathlib import Path
 
 from langchain_openai import ChatOpenAI
 from langgraph.graph.state import CompiledStateGraph
-
-# Add deepagents to path
-DEEPAGENTS_PATH = Path(__file__).parent.parent / "deepagents" / "libs" / "deepagents"
-if str(DEEPAGENTS_PATH) not in sys.path:
-    sys.path.insert(0, str(DEEPAGENTS_PATH))
-
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
 

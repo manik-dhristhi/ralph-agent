@@ -57,7 +57,7 @@ async def ralph_minimal(task: str, config: RalphConfig):
         console.print(f"[cyan]Resuming from iteration {state.iteration}[/cyan]")
 
     # Put SKILL.md in workspace for agent to read (don't inject into prompt!)
-    skills_source = Path(__file__).parent.parent / "skills" / "SKILL.md"
+    skills_source = Path(__file__).parent / "skills" / "SKILL.md"
     if skills_source.exists():
         skills_dest = config.workspace_dir / "SKILL.md"
         if not skills_dest.exists():
