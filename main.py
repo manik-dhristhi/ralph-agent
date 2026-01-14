@@ -14,6 +14,8 @@ from rich.panel import Panel
 
 from src.config import RalphConfig
 from src.state_manager import create_initial_state, read_state, write_state
+from src.token_tracker import TokenBudgetTracker
+from src.execution import execute_task
 from ralph_minimal.agent_factory_minimal import create_ralph_agent_minimal
 
 console = Console()
@@ -42,7 +44,7 @@ async def ralph_minimal(task: str, config: RalphConfig):
         f"[bold]Workspace:[/bold] {config.workspace_dir.absolute()}\n"
         f"[bold]Max Iterations:[/bold] {config.max_iterations or 'Unlimited'}\n"
         f"[bold]Model:[/bold] {config.model_name}\n\n"
-        f"[green]Token optimization: System prompt ~200 tokens (was ~5000!)[/green]",
+        f"[green]Using gpt-4o-mini: 150K TPM (5x rate limit) + 20x cheaper![/green]",
         title="Starting Ralph Agent",
         border_style="blue",
     ))
@@ -56,13 +58,15 @@ async def ralph_minimal(task: str, config: RalphConfig):
     else:
         console.print(f"[cyan]Resuming from iteration {state.iteration}[/cyan]")
 
-    # Put SKILL.md in workspace for agent to read (don't inject into prompt!)
-    skills_source = Path(__file__).parent / "skills" / "SKILL.md"
-    if skills_source.exists():
-        skills_dest = config.workspace_dir / "SKILL.md"
-        if not skills_dest.exists():
-            skills_dest.write_text(skills_source.read_text())
-            console.print("[dim]Copied SKILL.md to workspace for agent reference[/dim]")
+    # NOTE: We don't copy SKILL.md to workspace anymore
+    # The agent works purely from the minimal system prompt
+    # SKILL.md is kept in skills/ directory for future deepagent-cli integration
+
+    # Initialize token tracker for rate limiting
+    token_tracker = TokenBudgetTracker(
+        max_tokens_per_minute=150000,  # OpenAI GPT-4o-mini limit (5x higher than gpt-4o!)
+        safety_margin=0.9,  # Use 90% of limit for safety
+    )
 
     iteration = state.iteration
 
@@ -81,27 +85,50 @@ async def ralph_minimal(task: str, config: RalphConfig):
         ))
 
         try:
-            # Create fresh agent with MINIMAL prompt
+            # Create FRESH agent each iteration (Ralph pattern: fresh context every loop)
+            console.print("[dim]Creating fresh agent for this iteration...[/dim]")
             agent = create_ralph_agent_minimal(
-                task=task,
-                iteration=iteration,
                 workspace_dir=config.workspace_dir,
                 model_name=config.model_name,
             )
 
-            # Simple user message (task already in system prompt)
-            console.print("[dim]Agent working...[/dim]")
-            result = await agent.ainvoke({
-                "messages": [{"role": "user", "content": f"Continue working on iteration {iteration}."}]
-            })
+            # Execute task with rate limiting and token tracking
+            console.print("[dim]Agent working (streaming enabled)...[/dim]\n")
 
-            # Show completion
-            messages = result.get("messages", [])
-            total_chars = sum(len(str(m)) for m in messages)
-            estimated_tokens = total_chars // 4
+            # Build user message with task and iteration context
+            user_message = f"""## Iteration {iteration}
 
+TASK: {task}
+
+STRICT INSTRUCTIONS:
+1. Read state.md ONCE (shows what's been completed)
+2. Do EXACTLY ONE task: Create OR edit ONE file in output/
+3. Update state.md (increment iteration, add what you did)
+4. STOP IMMEDIATELY after updating state.md
+
+EFFICIENCY RULES:
+- You have recursion_limit=40, don't waste steps
+- Don't re-read files, don't overthink, don't validate
+- Workflow: read → create/edit → update → STOP
+- MAX 1 file operation per iteration
+
+Your memory is ONLY in files. If you don't update state.md, next iteration won't know what you did."""
+
+            total_tokens_used = await execute_task(
+                prompt=user_message,
+                agent=agent,
+                token_tracker=token_tracker,
+                config={"recursion_limit": 80},  # Real limit (agent told 40 for psychological pressure)
+                verbose=True,
+            )
+
+            # Show completion stats
+            stats = token_tracker.get_stats()
             console.print(f"[green]✓ Iteration {iteration} completed[/green]")
-            console.print(f"[dim]Estimated tokens: {estimated_tokens:,} (much lower!)[/dim]\n")
+            console.print(f"[cyan]Tokens this iteration: {total_tokens_used:,}[/cyan]")
+            console.print(f"[dim]Total tokens: {stats['total_tokens']:,} | "
+                         f"Window usage: {stats['current_window_usage']:,}/{stats['limit']:,} "
+                         f"({stats['utilization_pct']:.1f}%)[/dim]\n")
 
         except KeyboardInterrupt:
             console.print("\n[yellow]Interrupted. Exiting...[/yellow]")
@@ -113,7 +140,10 @@ async def ralph_minimal(task: str, config: RalphConfig):
             console.print("[yellow]Continuing to next iteration...[/yellow]")
 
         iteration += 1
-        await asyncio.sleep(1)  # Brief pause between iterations
+
+        # Small delay between iterations (rate limiting is handled by token tracker)
+        if not shutdown_requested:
+            await asyncio.sleep(1)  # Just a brief pause for UI clarity
 
     # Print final summary
     state = read_state(config.workspace_dir)

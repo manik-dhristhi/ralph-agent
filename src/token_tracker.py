@@ -32,7 +32,7 @@ class TokenBudgetTracker:
 
     def __init__(
         self,
-        max_tokens_per_minute: int = 30000,
+        max_tokens_per_minute: int = 150000,
         window_seconds: int = 60,
         safety_margin: float = 0.9,  # Use 90% of limit to be safe
         persist_path: Path | None = None,
@@ -40,7 +40,7 @@ class TokenBudgetTracker:
         """Initialize the token budget tracker.
 
         Args:
-            max_tokens_per_minute: Maximum tokens per minute (default: 30K for gpt-4o).
+            max_tokens_per_minute: Maximum tokens per minute (default: 150K for gpt-4o-mini).
             window_seconds: Rolling window size in seconds (default: 60).
             safety_margin: Use this fraction of max tokens (default: 0.9 = 90%).
             persist_path: Optional path to persist tracker state across runs.
@@ -171,3 +171,26 @@ class TokenBudgetTracker:
         except Exception:
             # If loading fails, start fresh
             self.usage_history = deque()
+
+    def get_stats(self) -> dict:
+        """Get current tracker statistics.
+
+        Returns:
+            Dictionary with usage statistics including:
+            - total_tokens: Total tokens across all time
+            - current_window_usage: Tokens in current 60s window
+            - available_tokens: Remaining budget in window
+            - limit: Effective limit (with safety margin)
+            - utilization_pct: Current window utilization percentage
+        """
+        current_usage = self.get_usage_in_window()
+        available = self.get_remaining_budget()
+        total_tokens = sum(record.tokens for record in self.usage_history)
+
+        return {
+            "total_tokens": total_tokens,
+            "current_window_usage": current_usage,
+            "available_tokens": available,
+            "limit": self.max_tokens,
+            "utilization_pct": (current_usage / self.max_tokens * 100) if self.max_tokens > 0 else 0,
+        }

@@ -28,7 +28,7 @@ class RalphConfig:
     # Model settings (OpenAI)
     model_name: str = field(
         default_factory=lambda: os.environ.get(
-            "RALPH_MODEL", "gpt-4o"
+            "RALPH_MODEL", "gpt-4o-mini"  # Using mini for 5x rate limit (150K TPM)
         )
     )
 

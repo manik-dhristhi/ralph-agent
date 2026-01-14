@@ -14,58 +14,82 @@ from src.tools import get_ralph_tools
 
 
 # MINIMAL system prompt - let the agent figure out the rest
-RALPH_MINIMAL_PROMPT = """You are Ralph, an autonomous agent working iteratively on a task.
+RALPH_MINIMAL_PROMPT = """You are Ralph, an autonomous agent working iteratively.
 
-Your previous work is in the filesystem. Check what exists using ls and read_file.
-Continue making progress on the task.
+CRITICAL RULES (MUST FOLLOW):
+1. FIRST: Read state.md to see what's been done
+2. Do EXACTLY ONE focused task - create OR edit ONE file in output/
+3. LAST: Update state.md before finishing
 
-Important:
-- Read state.md to see what you've completed
-- Update state.md with your progress before finishing
-- Focus on one concrete task per iteration
-- All files go in the output/ directory
+STRICT LIMIT: Create/edit MAX 1 FILE per iteration. Do NOT create multiple files.
 
-Available filesystem tools: ls, read_file, write_file, edit_file, glob, grep
-Planning tool: write_todos (create exactly 1 todo for this iteration)
-Research tool: tavily_search_results_json
+EFFICIENCY: You have limited steps (recursion_limit=40). Be efficient:
+- Don't overthink or plan excessively
+- Don't re-read files you already read
+- Read state.md → create/edit ONE file → update state.md → DONE
+- Aim for 5-8 tool calls maximum per iteration
+- Stop immediately after updating state.md
 
-You'll be called again after this iteration completes."""
+QUALITY: Generate detailed, useful content:
+- Add real substance, not just outlines
+- Include examples, code snippets, explanations
+- Make each lesson comprehensive and valuable
+- Don't create shallow placeholders
+
+GOOD examples (ONE task):
+- Create lesson_01.md with detailed introduction (code examples, exercises)
+- Edit course_outline.md to add module details
+- Create exercises_week1.md with practice problems
+
+BAD examples (NEVER do this):
+- Create outline.md AND lesson_01.md (multiple files)
+- Create 5 different outline files
+- Create shallow content with just bullet points
+- Overthink and use 20+ tool calls
+
+state.md format:
+```
+## Iteration
+[increment the number]
+
+## Completed Work
+- [x] [what you just did]
+
+## Files Created
+- [list all files in output/]
+```
+
+Your memory is ONLY in files. Update state.md or next iteration won't know what you did."""
 
 
 def create_ralph_agent_minimal(
-    task: str,
-    iteration: int,
     workspace_dir: Path,
-    model_name: str = "gpt-4o",
+    model_name: str = "gpt-4o-mini",
 ) -> CompiledStateGraph:
     """Create a DeepAgent with MINIMAL prompt to avoid token bloat.
 
     Key difference from previous version:
-    - System prompt: ~200 tokens (was ~5000 tokens!)
+    - System prompt: ~100 tokens (was ~5000 tokens!)
     - No skills injection (put in filesystem instead)
     - No state format injection (agent figures it out)
-    - Task in user message, not system prompt
+    - Task passed in user message, not system prompt (saves tokens)
 
     Args:
-        task: The task description.
-        iteration: Current iteration number.
         workspace_dir: Path to the workspace directory.
         model_name: Name of the OpenAI model to use.
 
     Returns:
         A compiled DeepAgent ready for execution.
     """
-    # Simple system prompt with iteration context
-    system_prompt = f"""{RALPH_MINIMAL_PROMPT}
+    # Ultra-minimal system prompt - task and iteration passed via user message
+    system_prompt = RALPH_MINIMAL_PROMPT
 
-Current iteration: {iteration}
-
-Task: {task}"""
-
-    # Create the OpenAI model
+    # Create the OpenAI model with reasonable token limits and streaming enabled
     model = ChatOpenAI(
         model=model_name,
-        max_tokens=16000,
+        max_tokens=4000,  # Reduced from 16000 to prevent rate limit issues
+        streaming=True,  # Enable streaming for real-time output
+        model_kwargs={"stream_options": {"include_usage": True}},  # Track actual token usage
     )
 
     # Create filesystem backend

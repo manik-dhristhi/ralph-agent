@@ -5,7 +5,12 @@ that come with DeepAgents.
 """
 
 import os
-from langchain_community.tools.tavily_search import TavilySearchResults
+
+# Try to use new langchain-tavily package, fall back to community if not available
+try:
+    from langchain_tavily import TavilySearchResults
+except ImportError:
+    from langchain_community.tools.tavily_search import TavilySearchResults
 
 
 def get_search_tool() -> TavilySearchResults:
