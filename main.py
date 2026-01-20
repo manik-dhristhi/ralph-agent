@@ -13,7 +13,6 @@ from rich.console import Console
 from rich.panel import Panel
 
 from src.config import RalphConfig
-from src.state_manager import create_initial_state, read_state, write_state
 from src.token_tracker import TokenBudgetTracker
 from src.execution import execute_task
 from ralph_minimal.agent_factory_minimal import create_ralph_agent_minimal
@@ -49,26 +48,36 @@ async def ralph_minimal(task: str, config: RalphConfig):
         border_style="blue",
     ))
 
-    # Load or create state
-    state = read_state(config.workspace_dir)
-    if state is None:
-        state = create_initial_state(task)
-        write_state(config.workspace_dir, state)
-        console.print("[green]Created initial state.md[/green]")
-    else:
-        console.print(f"[cyan]Resuming from iteration {state.iteration}[/cyan]")
+    # Create or resume from state.md
+    state_file = config.workspace_dir / "state.md"
+    if not state_file.exists():
+        # Create initial state.md with just-in-time planning + summary format
+        initial_state = f"""User Query: {task}
+Iteration: 1
+Task: Analyze the goal and plan first task, then start working
+Files: none
 
-    # NOTE: We don't copy SKILL.md to workspace anymore
-    # The agent works purely from the minimal system prompt
-    # SKILL.md is kept in skills/ directory for future deepagent-cli integration
+Summary:
+- Nothing created yet
+
+Next Task:
+"""
+        state_file.write_text(initial_state)
+        console.print("[green]Created initial state.md with summary tracking[/green]")
+        iteration = 1
+    else:
+        # Read current iteration from state.md
+        content = state_file.read_text()
+        import re
+        match = re.search(r"Iteration:\s*(\d+)", content)
+        iteration = int(match.group(1)) if match else 1
+        console.print(f"[cyan]Resuming from iteration {iteration}[/cyan]")
 
     # Initialize token tracker for rate limiting
     token_tracker = TokenBudgetTracker(
         max_tokens_per_minute=150000,  # OpenAI GPT-4o-mini limit (5x higher than gpt-4o!)
         safety_margin=0.9,  # Use 90% of limit for safety
     )
-
-    iteration = state.iteration
 
     while True:
         if shutdown_requested:
@@ -96,23 +105,12 @@ async def ralph_minimal(task: str, config: RalphConfig):
             console.print("[dim]Agent working (streaming enabled)...[/dim]\n")
 
             # Build user message with task and iteration context
-            user_message = f"""## Iteration {iteration}
+            user_message = f"""Begin iteration. Follow your 3-step workflow:
+1. READ & CHECK state.md and ls output/ - recover if needed
+2. CREATE ONE FILE in output/ on a new topic
+3. UPDATE state.md (increment Iteration, add to Summary and planning for next task) and STOP
 
-TASK: {task}
-
-STRICT INSTRUCTIONS:
-1. Read state.md ONCE (shows what's been completed)
-2. Do EXACTLY ONE task: Create OR edit ONE file in output/
-3. Update state.md (increment iteration, add what you did)
-4. STOP IMMEDIATELY after updating state.md
-
-EFFICIENCY RULES:
-- You have recursion_limit=40, don't waste steps
-- Don't re-read files, don't overthink, don't validate
-- Workflow: read → create/edit → update → STOP
-- MAX 1 file operation per iteration
-
-Your memory is ONLY in files. If you don't update state.md, next iteration won't know what you did."""
+Remember: ONE file per iteration. Check Summary for duplicates. Stop after updating state.md."""
 
             total_tokens_used = await execute_task(
                 prompt=user_message,
@@ -146,11 +144,11 @@ Your memory is ONLY in files. If you don't update state.md, next iteration won't
             await asyncio.sleep(1)  # Just a brief pause for UI clarity
 
     # Print final summary
-    state = read_state(config.workspace_dir)
+    output_files = list(config.output_path.glob("*.md")) if config.output_path.exists() else []
     console.print(Panel(
         f"[bold]Completed Iterations:[/bold] {iteration - 1}\n"
         f"[bold]Workspace:[/bold] {config.workspace_dir.absolute()}\n"
-        f"[bold]Files Created:[/bold] {len(state.files_created) if state else 0}",
+        f"[bold]Files Created:[/bold] {len(output_files)}",
         title="Ralph Session Complete",
         border_style="green",
     ))
